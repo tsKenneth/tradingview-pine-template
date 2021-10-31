@@ -1,0 +1,219 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © tskenneth
+
+//@version=<Version Number>
+
+'''
+[A] Definition ================================================================
+First, you have to define the parameters that will be used for the strategy.
+The options are as follows-
+- title (const string): REQUIRED, name of the strategy, which will show up in
+                        the widgets
+- currency: Account currency for this strategy
+- slippage: Slippage for market and stop orders in points impairs the filling 
+            price of market and stop-market orders for a specified number of 
+            ticks. E.g. if mintick = 0.01, slippage=5 would make the slippage 
+            price 5*0.01=0.05.
+- commission_type:   Commission type for an order. The allowed values are: 
+                    strategy.commission.percent (a percentage of the cash 
+                    volume of order), strategy.commission.cash_per_contract 
+                    (money displayed in the account currency per contract), 
+                    strategy.commission.cash_per_order (money displayed in the 
+                    account currency per order).
+- commission_value: Commission value for an order. Depending on the type 
+                    selected (commission_type) includes percentage or money.
+'''
+
+strategy("<Strategy Name>", initial_capital=10000, 
+     overlay=true, 
+     currency="USD",
+     slippage=0,
+     commission_type=strategy.commission.percent,
+     commission_value=0.0015)
+
+'''
+[B] Money Management
+To be expanded
+'''
+mmBalance = strategy.netprofit + strategy.initial_capital
+
+
+'''
+[C] Utility functions =========================================================
+[1] Backtest period helper function -------------------------------------------
+This section defines the period where the strategy will be backtested.
+Do not edit.
+'''
+testPeriodStartDay = input(title="Start Date", type=input.integer,
+     defval=1, minval=1, maxval=31)
+testPeriodStartMonth = input(title="Start Month", type=input.integer,
+     defval=1, minval=1, maxval=12)
+testPeriodStartYear = input(title="Start Year", type=input.integer,
+     defval=2021, minval=1800, maxval=2100)
+
+testPeriodEndDay = input(title="End Date", type=input.integer,
+     defval=1, minval=1, maxval=31)
+testPeriodEndMonth = input(title="End Month", type=input.integer,
+     defval=1, minval=1, maxval=12)
+testPeriodEndYear = input(title="End Year", type=input.integer,
+     defval=2022, minval=1800, maxval=2100)
+
+testPeriodStart = timestamp(testPeriodStartYear,
+     testPeriodStartMonth,testPeriodStartDay,0,0)
+testPeriodEnd = timestamp(testPeriodEndYear,
+     testPeriodEndMonth,testPeriodEndDay,0,0)
+
+testPeriod() =>
+    time >= testPeriodStart and time <= testPeriodEnd ? true : false
+
+'''
+[D] Indicator functions =======================================================
+This section defines all the different indicator lines which will be
+define and used in the trade logic. Do not edit.
+'''
+'''
+[1] Bollinger Bands -----------------------------------------------------------
+From Investopedia:
+Bollinger Bands® are a highly popular technique. Many traders believe the 
+closer the prices move to the upper band, the more overbought the market, 
+and the closer the prices move to the lower band, the more oversold the market. 
+
+appliedPrice:   The price to apply the function with 
+                i.e. (open,close,high,low)
+smaPeriod:      Lookback period to calculate simple moving average
+stdevPeriod:    Lookback period to calculate standard deviation
+stdevMulti:     Standard deviation multiplier
+upperBool:      Boolean to check to use upper bollinger band
+                true to use upper band, false to use lower band
+'''
+bollinger_bands(appliedPrice,smaPeriod,stdevPeriod,stdevMulti,upperBool) =>
+    smaVal = sma(appliedPrice, smaPeriod)
+    stdevVal = stdev(appliedPrice, stdevPeriod)
+    if (upperBool == true)
+        smaVal + (stdevMulti * stdevVal)
+    else
+        smaVal - (stdevMulti * stdevVal)
+'''
+[2] Keltner Channel -----------------------------------------------------------
+From Investopedia:
+If the price action breaks above the band, the trader should consider initiating 
+long positions while liquidating short positions. If the price action breaks 
+below the band, the trader should consider initiating short positions 
+while exiting long or buy positions.
+
+appliedPrice:   The price to apply the function with 
+                i.e. (open,close,high,low)
+smaPeriod:      Lookback period to calculate simple moving average (SMA)
+atrPeriod:      Lookback period to calculate average true range (ATR)
+atrMulti:       Multiplier to apply to average true range (Default is 2)
+upperBool:      Boolean to check to use upper keltner channel
+                true to use upper channel, false to use lower channel
+'''
+keltner_channel(appliedPrice,smaPeriod,atrPeriod,atrMulti,upperBool) =>
+    smaVal = sma(appliedPrice, smaPeriod)
+    atrVal = stdev(appliedPrice, atrPeriod)
+    if (upperBool == true)
+        smaVal + (atrMulti * atrVal)
+    else
+        smaVal - (atrMulti * atrVal)
+
+'''
+[3] William %R ----------------------------------------------------------------
+From Investopedia:
+When the indicator is between -20 and zero the price is overbought, 
+or near the high of its recent price range. 
+When the indicator is between -80 and -100 the price is oversold, 
+or far from the high of its recent range.
+
+appliedPrice:   The price to apply the function with 
+                i.e. (open,close,high,low)
+wPeriod:        Lookback period to capture the highest and lowest price
+'''
+william_r(appliedPrice,wPeriod) =>
+    wUpper = highest(wPeriod)
+    wLower = lowest(wPeriod)
+    -100 * (wUpper - appliedPrice) / (wUpper - wLower)
+
+'''
+[4] ADX -----------------------------------------------------------------------
+From Investopedia:
+ADX is used to quantify trend strength. ADX calculations are based on a 
+moving average of price range expansion over a given period of time.
+
+adxPeriod:  Number of lookback periods to calculate ADX value
+sigPeriod:  Number of lookback periods to calculate signal line
+'''
+adx(adxPeriod,sigPeriod) =>
+    up = change(high)
+    down = -change(low)
+    plusDM = na(up) ? na : (up > down and up > 0 ? up : 0)
+    minusDM = na(down) ? na : (down > up and down > 0 ? down : 0)
+    trur = rma(tr, adxPeriod)
+    plus = fixnan(100 * rma(plusDM, adxPeriod) / trur)
+    minus = fixnan(100 * rma(minusDM, adxPeriod) / trur)
+    sum = plus + minus
+    100 * rma(abs(plus - minus) / (sum == 0 ? 1 : sum), sigPeriod)
+
+'''
+[5] Kijun Sen ----------------------------------------------------------------
+From Investopedia:
+On its own, Kijun-sen shows the midpoint price for the last 26 periods. 
+Similar to a moving average, when the price is above the base line it indicates 
+the price is above the midpoint and therefore short-term price momentum is up.
+
+When the price is below the base line, and especially if Kijun-sen is angled 
+downwards, that indicates price momentum is to the downside as the price 
+is below the 26-period midpoint.
+
+ksPeriod:   Lookback period to calculate Kijun-sen value
+'''
+kijun_sen(ksPeriod) =>
+    (highest(high,ksPeriod) + lowest(low,ksPeriod))/2
+
+
+'''
+[0] Inbuilt indicators --------------------------------------------------------
+Any use of custom or combined indicators can go here.
+'''
+[macd_line,macd_sig,_] = macd(close,12,26,9)
+
+'''
+[E] Trade Logics ==============================================================
+This section determines the trade logic. Several options can be used:
+cross(a,b):         Execute action when indicators a and b cross in any 
+                    direction
+crossover(a,b):     Execute action when indicator a cross over b  
+crossunder(a,b):    Execute action when indicator a cross under b
+barssince(n):       Execute action after n number of period has passed
+
+a and b:            Execute action when logic a and b are true
+a or b:             Execute action when logic a or b are true
+'''
+// [1] Long Entry
+logicLongEntry = crossover(macd_line[2],macd_sig)
+logicLongEntryQty = mmBalance/close[1]
+// [2] Long Exit
+logicLongExit = barssince(logicLongEntry) >= 28
+// [3] Short Entry
+logicShortEntry = false
+logicShortEntryQty = mmBalance/close[1]
+// [4] Short Exit
+logicShortExit = false
+
+'''
+[F] Trade Execution ===========================================================
+This section performs the trade executions based on defined logics in section E
+Do not edit.
+'''
+isOpen = strategy.opentrades > 0
+
+if(testPeriod())
+    //Long entry
+    strategy.entry("LongEntry",true,mmBalance/close[1],when=logicLongEntry and not isOpen)
+    strategy.close("LongEntry",when=logicLongExit)
+
+    // Short Entry
+    strategy.entry("ShortEntry",true,mmBalance/close[1],when=logicShortEntry and not isOpen)
+    strategy.close("ShortEntry",when=logicShortExit)
+
+plot(close)
